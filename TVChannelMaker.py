@@ -198,8 +198,6 @@ class Episode(object):
 					self.title = self.folder[index+1:len(self.folder)-1]
 
 def isVideo(name):
-	if ".ignore" in name.lower():
-		return False
 	return name.lower().endswith(".avi") or name.lower().endswith(".mpg") or name.lower().endswith(".mpeg") or name.lower().endswith(".asf") or name.lower().endswith(".wmv") or name.lower().endswith(".wma") or name.lower().endswith(".mp4") or name.lower().endswith(".mov") or name.lower().endswith(".3gp") or name.lower().endswith(".ogg") or name.lower().endswith(".ogm") or name.lower().endswith(".mkv")
 	
 def resetVariables():
@@ -223,8 +221,9 @@ def resetVariables():
 	root = 0
 
 def quitApplication():
-	global root
-	root.destroy();
+	root.destroy()
+	exit.set()
+	sys.exit()
 
 #gets the length of a media file (music or video)
 def getLength(filename):
@@ -475,7 +474,7 @@ def playAndSleep(timeslot, skipTime = 0):
 #also plays music while playing the timer			
 def playTimer():
 	global musicPlayer
-	media = vlc_instance.media_new(CHANNEL_PATH+".ignore 30min.mp4")
+	media = vlc_instance.media_new(r"assets\30_min_timer.mp4")
 	videoPlayer.set_media(media)
 	videoPlayer.play()
 	timePassed = datetime.datetime.now().time().second*1000+(datetime.datetime.now().time().minute%30)*1000*60
