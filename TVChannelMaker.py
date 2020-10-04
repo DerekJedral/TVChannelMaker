@@ -37,6 +37,7 @@ HALF_HOUR = 1800000
 BASE_VOLUME = 70
 exit = threading.Event()
 
+
 class Application(Frame):
 	def __init__(self, master):
 		Frame.__init__(self,master)
@@ -101,13 +102,15 @@ class Application(Frame):
 		self.addStoppedButtons()
 	
 	def startChannel(self):
-		global stopChannel
+		print("starting")
 		self.buttonStart.grid_forget()
 		self.buttonToggle.grid_forget()
 		self.buttonQuit.grid_forget()
 		self.buttonPick.grid_forget()
 		self.addPlayingButtons()
+		print("resetting")
 		resetVariables()
+		print("setting up")
 		setupChannel()
 
 	def addInitialButtons(self):
@@ -171,10 +174,13 @@ class Application(Frame):
 		quitApplication()
 
 class Episode(object):
-	def __init__(self, path):
+	def __init__(self, path, timeslot):
 		self.path = path.replace("\\", "/").rstrip()
-		self.folder = getPath(self.path)
+		self.series = getSeries(self.path)
 		self.length = getLength(self.path)
+		self.timeslot = timeslot
+		self.numSlots = math.ceil(self.length / HALF_HOUR)
+		'''
 		try:
 			with open(self.path[:self.path.rfind("/")+1]+'series.data','r') as file:
 				seriesData = file.readlines()
@@ -195,7 +201,7 @@ class Episode(object):
 				
 				except FileNotFoundError: #data file for series does not exist, so we'll create a new one
 					index = self.folder.rfind("/",0,len(self.folder)-1)
-					self.title = self.folder[index+1:len(self.folder)-1]
+					self.title = self.folder[index+1:len(self.folder)-1]'''
 
 def isVideo(name):
 	return name.lower().endswith(".avi") or name.lower().endswith(".mpg") or name.lower().endswith(".mpeg") or name.lower().endswith(".asf") or name.lower().endswith(".wmv") or name.lower().endswith(".wma") or name.lower().endswith(".mp4") or name.lower().endswith(".mov") or name.lower().endswith(".3gp") or name.lower().endswith(".ogg") or name.lower().endswith(".ogm") or name.lower().endswith(".mkv")
@@ -239,7 +245,7 @@ def getLength(filename):
 			
 			return totalTime
 			
-	return 1799999
+	return HALF_HOUR - 1
 	
 def getPath(fullPath):
 	global CHANNEL_PATH
@@ -269,7 +275,7 @@ def reloadData():
 #update our channel.data file with our current episode progress
 def updateData(timeslot, path):
 	channelData[timeslot] = path
-	reloadData();
+	reloadData()
 
 #if we were away from the channel, we missed episodes airing. So, we skip them
 def skipEpisodes():
@@ -281,47 +287,6 @@ def skipEpisodes():
 		timeslot = lastSeenDate.time().hour*2 +  math.floor(lastSeenDate.time().minute/30)
 		loadNextEpisode(timeslot, False)
 		lastWatchedTime = lastWatchedTime + HALF_HOUR
-	
-	return None
-
-#creates a new TV schedule for our episode
-def createNewSchedule():
-	global channelData
-	global NUMBER_SLOTS
-	channelData = []
-	counter = 0
-	for dirpath, dirnames, files in os.walk(CHANNEL_PATH):
-		for name in files:
-			if isVideo(name):
-				isAdded = False
-				for row in channelData: #iterate through all episodes we've added to see if we've added this show yet
-					index = os.path.join(dirpath, name).find("\\",len(CHANNEL_PATH))
-					if row.find(os.path.join(dirpath, name)[:index]) != -1:
-						isAdded = True
-						break
-				
-				if isAdded is False: #add our episode to the schedule
-					channelData.append(os.path.join(dirpath, name)+"\n")
-					counter = counter+1
-			if counter == NUMBER_SLOTS:
-				break
-		if counter == NUMBER_SLOTS:
-			break
-	
-	if counter < NUMBER_SLOTS:
-		print("ERROR: not enough series to fill timeslots. Found: "+str(counter)+" Expected: "+str(NUMBER_SLOTS)+"\n")
-		exit()
-	else:
-		f = open(CHANNEL_PATH+'channel.data', 'w')
-		f.write(str(int(round(time.time() * 1000)))+"\n")
-		f.writelines(channelData)
-		f.close()
-		
-#load video schedule
-def loadSchedule():
-	for row in channelData:
-		episode = Episode(row)
-		schedule.append(episode)
 
 # writes to a series flag file
 def updateFlagFile(path, isEligible, seriesTitle):
@@ -450,7 +415,7 @@ def loadNextEpisode(timeslot, shouldPlay):
 		totalNumSlots = slotCounter
 		previousSlot = timeslot
 		if shouldPlay:
-			playAndSleep(timeslot)
+			playAndSleep(schedule[timeslot])
 	else: #episode is still going, reduce the counter
 		slotCounter = slotCounter - 1
 	
@@ -458,14 +423,14 @@ def loadNextEpisode(timeslot, shouldPlay):
 	
 #plays the video for the appropriate timeslot, and then sleeps for the remaining duration of the videoLength
 #then plays the timer video after
-def playAndSleep(timeslot, skipTime = 0):
-	media = vlc_instance.media_new(schedule[timeslot].path)
+def playAndSleep(episode, skipTime = 0):
+	media = vlc_instance.media_new(episode.path)
 	videoPlayer.set_media(media)
 	videoPlayer.play()
 	if skipTime != 0:
 		videoPlayer.set_time(skipTime)
 	if PLAY_MODE == "Default":
-		sleepLength = (getLength(schedule[timeslot].path) - skipTime)/1000
+		sleepLength = (episode.length - skipTime) / 1000
 		exit.wait(sleepLength)
 		if not checkChannelStopped():
 			playTimer()
@@ -516,30 +481,38 @@ def checkChannelStopped():
 		exit.clear()
 		return True
 	return False
-	
+
+def getCurrentPlayingEpisode():
+	timeslot = getTimeslot()
+	i = 0
+	nextIndex = 0
+	print("timeslot is "+str(timeslot))
+	while (nextIndex <= timeslot):
+		i = nextIndex
+		nextIndex = i + schedule[i].numSlots
+	return schedule[i]
+
+def now():
+	return datetime.datetime.now().time()
+
 def startChannel():
+	print("starting channel")
 	videoPlayer.audio_set_volume(BASE_VOLUME)
-	if PLAY_MODE == "Default":
-		timeslot = datetime.datetime.now().time().hour*2 +  math.floor(datetime.datetime.now().time().minute/30) #calculate current timeslot
-		counter = 0
-		playingIndex = 0
-		numSlots = 0
-		while (counter <= timeslot): # we go through our schedule, and figure out when things are playing. Movies take longer, and so take more slots, calculated to the nearest half hour rounded up
-			if (numSlots <= 0):
-				numSlots = math.floor(schedule[counter].length/HALF_HOUR)
-				playingIndex = counter
-			else:
-				numSlots = numSlots - 1
-			
-			counter = counter + 1
-		
-		#setup our video player. If we start in the middle of a timeslot, we also want to skip the video to its proper time
-		skipTime = datetime.datetime.now().time().second*1000+(datetime.datetime.now().time().minute%30)*1000*60+HALF_HOUR*(math.floor(schedule[playingIndex].length/HALF_HOUR)-numSlots)
-		videoLength = getLength(schedule[getTimeslot()].path)
-		if skipTime < videoLength: #if the episode would still be playing
+	#if PLAY_MODE == "Default":
+	episode = getCurrentPlayingEpisode()
+	# Setup our video player.
+	# If we start in the middle of a timeslot, we also want to skip
+	# the video to its proper time.\
+	# Total time skipped = 
+	# (number of extra timeslots * HALF HOUR) +
+	# (number of seconds + number of minutes past the nearest half hour, in seconds)
+	skipTime = ((getTimeslot()-episode.timeslot) * HALF_HOUR +
+	(now().second + now().minute % 30 * 60) * 1000)
+	print("episode to play is "+episode.path)
+	print("skip time is "+str(skipTime))
+	'''	if skipTime < episode.length: #if the episode would still be playing
 			playAndSleep(playingIndex, skipTime)
 		else:
-			print("skipping, skipTime "+str(skipTime)+" vidLength "+str(getLength(schedule[getTimeslot()].path)) + " asd")
 			playTimer()
 	while True:
 		if checkChannelStopped():
@@ -552,9 +525,73 @@ def startChannel():
 		elif datetime.datetime.now().time().second%10 < 5: # new slot of 10 seconds for testing mode
 			loadNextEpisode(getTimeslot(), True)
 			exit.wait(7)
-		
+		'''
 	return 0
 
+def isValidDirectory(directory):
+	return not '..IGNORE' in directory
+
+#load video schedule
+def loadSchedule():
+	for row in channelData:
+		schedule.append(Episode(row, len(schedule)))
+
+# gets the series from the full path of the episode
+# DO NOT CHANGE THIS CODE EVER
+def getSeries(fullPath):
+	# Get the first slash after the channel directory
+	# Return the substring between the channel directory and this slash
+	slashIndex = fullPath.find("\\", len(CHANNEL_PATH))
+	return fullPath[len(CHANNEL_PATH): slashIndex]
+
+# gets the first episode in the series, returns its full path
+# DO NOT CHANGE THIS CODE EVER
+def getFirstEpisode(series):
+	for dirpath, dirnames, files in os.walk(CHANNEL_PATH + '\\' + series):
+		for name in files:
+			if isVideo(name):
+				return os.path.join(dirpath, name)
+	print("ERROR: series " + series + " has no episodes!")
+	sys.exit()
+
+#creates a new TV schedule for our episode
+def createChannelData():
+	global channelData
+	global NUMBER_SLOTS
+	channelData = []
+	seriesList = list(filter(isValidDirectory, os.listdir(CHANNEL_PATH)))
+	if (len(seriesList) < NUMBER_SLOTS + 1):
+		print("ERROR: not enough series to fill timeslots.")
+		sys.exit()
+	random.shuffle(seriesList)
+	# Go through the series, find the very first video file for that series
+	for series in seriesList[:NUMBER_SLOTS]:
+		channelData.append(getFirstEpisode(series))
+		print(getFirstEpisode(series))
+
+	f = open(CHANNEL_PATH+'channel.data', 'w')
+	f.write(str(int(round(time.time() * 1000)))+'\n')
+	f.write('\n'.join(channelData))
+	f.close()
+	f = open(CHANNEL_PATH+'queue.data', 'w')
+	f.write('\n'.join(seriesList[NUMBER_SLOTS:]))
+	f.close()
+
+def loadChannelData():
+	global channelData
+	global lastWatchedTime
+	try:
+		with open(CHANNEL_PATH+'channel.data', 'r') as file:
+			channelData = file.readlines()
+			file.close()
+			lastWatchedTime = int(channelData[0].rstrip())
+			channelData = channelData[1:]
+			if len(channelData) < NUMBER_SLOTS:
+				print("ERROR: not enough series to fill timeslots. Found: "+str(len(channelData))+" Expected: "+str(NUMBER_SLOTS)+"\n")
+				sys.exit()
+	except FileNotFoundError: #first time booting the channel, make new schedule
+		createChannelData()
+	
 def setupChannel():
 	global CHANNEL_PATH
 	global PLAY_MODE
@@ -572,32 +609,21 @@ def setupChannel():
 	else: #in testing, we make timeslots 10s long, and make a day 1 minute long, so total timeslots is 6
 		NUMBER_SLOTS = 6
 
-	#setup the videoe player
+	#setup the video player
+	print("starting vlc")
 	vlc_instance = vlc.Instance("--quiet")
 	videoPlayer = vlc_instance.media_player_new()
 	videoPlayer.toggle_fullscreen()
 	musicPlayer = vlc_instance.media_player_new()
 	
-	#load up the channel where we left off from
-	try:
-		with open(CHANNEL_PATH+'channel.data', 'r') as file:
-			channelData = file.readlines()
-			file.close()
-			lastWatchedTime = int(channelData[0].rstrip())
-			channelData = channelData[1:]
-			if len(channelData) < NUMBER_SLOTS:
-				print("ERROR: not enough series to fill timeslots. Found: "+str(len(channelData))+" Expected: "+str(NUMBER_SLOTS)+"\n")
-				exit()
-	except FileNotFoundError: #first time booting the channel, make new schedule
-		createNewSchedule()
-		lastWatchedTime = int(round(time.time() * 1000))
-	
+	print("loading channel data")
+	loadChannelData()
+	print("load schedule")
 	loadSchedule()
-	for series in schedule: #these should in theory be set, but won't be for the very first time.
-		updateFlagFile(series.folder, "false", series.title)
-		
-	if PLAY_MODE == "Default" and shouldSkip:
-		skipEpisodes()
+	
+	#if PLAY_MODE == "Default" and shouldSkip:
+		#skipEpisodes()
+	print("starting thread")
 	thread = Thread(target = startChannel, args = ())
 	thread.start()
 	
