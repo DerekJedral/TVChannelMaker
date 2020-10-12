@@ -62,7 +62,7 @@ class Application(Frame):
 			else:
 				scheduleString = scheduleString+ str(counter)+":"
 			if totalSlots == 0:
-				totalSlots = episode.numSlots - 1
+				totalSlots = episode.getNumSlots() - 1
 				currentEpisodeTitle = episode.series
 				scheduleString=scheduleString+episode.series+"\n"
 			else:
@@ -153,7 +153,6 @@ class Episode(object):
 		self.series = getSeries(self.path)
 		self.length = -1
 		self.timeslot = timeslot
-		self.numSlots = 1
 		
 	def getLength(self):
 		if self.length == -1:
@@ -235,12 +234,11 @@ def getTimeslot():
 def loadEpisodeForTimeslot(timeslot, shouldPlay):
 	global numSlots
 	if (numSlots <= 0): # episode is over, load a new one
-		numSlots = schedule[timeslot].numSlots - 1 #calculate how many slots the new show needs
+		numSlots = schedule[timeslot].getNumSlots() - 1 #calculate how many slots the new show needs
 		if shouldPlay:
 			playEpisode(schedule[timeslot])
 	else: #episode is still going, reduce the counter
 		numSlots = numSlots - 1
-		print('----just decreasing numSlots')
 	return
 
 def writeScheduleToDisk():
@@ -387,7 +385,6 @@ def startChannel():
 			playEpisode(episode, skipTime)
 		else:
 			playTimer()
-	numSlots = -1
 	while True:
 		if checkChannelStopped():
 			break
