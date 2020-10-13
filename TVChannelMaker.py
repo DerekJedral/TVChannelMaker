@@ -19,6 +19,7 @@ HALF_HOUR = 1800000
 BASE_VOLUME = 70
 
 # Global, set by program
+window = 0
 root = 0
 vlc_instance = 0
 videoPlayer = 0
@@ -47,7 +48,19 @@ class Application(Frame):
 		self.buttonSkip = Button(self)
 		self.buttonSkip["text"] = "Skip episodes: " +str(self.shouldSkip)
 		self.buttonSkip["command"] = self.toggle_skip
-		self.buttonSkip.grid(row=3, column=2, sticky=W)
+		self.buttonSkip.grid(row=4, column=2, sticky=W)
+
+		self.audioTracksVariable = StringVar(root)
+		self.audioTracksVariable.set('None')
+		self.audioTracksVariable.trace('w', self.onAudioTracksChange)
+		audioValues = {'None'}
+		self.dropDownAudio = OptionMenu(self, self.audioTracksVariable, *audioValues)
+
+		self.subtitleTracksVariable = StringVar(root)
+		self.subtitleTracksVariable.set('None')
+		self.subtitleTracksVariable.trace('w', self.onSubtitlesChange)
+		subtitleValues = {'None'}
+		self.dropDownSubtitles = OptionMenu(self, self.subtitleTracksVariable, *subtitleValues)
 		
 	def open_guide(self):
 		self.text.delete(0.0, END)
@@ -71,6 +84,7 @@ class Application(Frame):
 			counter=counter+1
 		
 		self.text.insert(0.0, scheduleString)
+
 	def stop_channel(self):
 		CHANNEL_THREAD.set()
 		
@@ -79,6 +93,8 @@ class Application(Frame):
 		
 		self.buttonGuide.grid_forget()
 		self.buttonStop.grid_forget()
+		self.dropDownAudio.grid_forget()
+		self.dropDownSubtitles.grid_forget()
 		self.addInitialButtons()
 		self.addStoppedButtons()
 		
@@ -88,7 +104,39 @@ class Application(Frame):
 		self.text.delete(0.0, END)
 		self.text.insert(0.0, "Channel: "+CHANNEL_PATH)
 		self.addStoppedButtons()
+
+	def listAudioTracks(self, audioTracks, currentAudioTrack):
+		self.audioTracks = audioTracks
+		audioTrackIds = list(map(lambda pair: pair[0], audioTracks))
+		idIndex = audioTrackIds.index(currentAudioTrack)
+		self.audioTracksVariable.set(audioTracks[idIndex][1])
+		self.dropDownAudio.grid_forget()
+		self.dropDownAudio = OptionMenu(self, self.audioTracksVariable, *(map(lambda pair: pair[1], audioTracks)))
+		self.dropDownAudio.grid(row=2, column=2, sticky=W)
 	
+	def listSubtitleTracks(self, subtitleTracks, currentSubtitleTrack):
+		self.subtitleTracks = subtitleTracks
+		subtitleTrackIds = list(map(lambda pair: pair[0], subtitleTracks))
+		idIndex = subtitleTrackIds.index(currentSubtitleTrack)
+		self.subtitleTracksVariable.set(subtitleTracks[idIndex][1])
+		self.dropDownSubtitles.grid_forget()
+		self.dropDownSubtitles = OptionMenu(self, self.subtitleTracksVariable, *(map(lambda pair: pair[1], subtitleTracks)))
+		self.dropDownSubtitles.grid(row=3, column=2, sticky=W)
+
+	def onAudioTracksChange(self, *args):
+		for audioTrack in self.audioTracks:
+			trackDescription = audioTrack[1].decode("utf-8")
+			if (self.audioTracksVariable.get()[2:-1] == trackDescription):
+				videoPlayer.audio_set_track(audioTrack[0])
+				return
+
+	def onSubtitlesChange(self, *args):
+		for subtitlesTrack in self.subtitleTracks:
+			trackDescription = subtitlesTrack[1].decode("utf-8")
+			if (self.subtitleTracksVariable.get()[2:-1] == trackDescription):
+				videoPlayer.video_set_spu(subtitlesTrack[0])
+				return
+
 	def startChannel(self):
 		self.buttonStart.grid_forget()
 		self.buttonToggle.grid_forget()
@@ -161,7 +209,9 @@ class Episode(object):
 
 	def getNumSlots(self):
 		return math.ceil(self.getLength() / HALF_HOUR)
-		
+
+#region util
+	
 def isVideo(name):
 	return (name.lower().endswith(".avi")
 	or name.lower().endswith(".mpg")
@@ -176,6 +226,21 @@ def isVideo(name):
 	or name.lower().endswith(".ogm")
 	or name.lower().endswith(".mkv"))
 	
+#gets our current timeslot
+def getTimeslot():
+	if DEFAULT_MODE:
+		timeslot = now().hour*2 +  math.floor(now().minute/30)
+	else:
+		timeslot = math.floor(now().second/10)
+	
+	return timeslot
+
+# Gets the remaining time in the timeslot, in ms
+def getRemainingTime():
+	return HALF_HOUR - timePassedInTimeslot()
+
+#endregion
+
 def resetVariables():
 	global videoPlayer
 	global musicPlayer
@@ -218,15 +283,6 @@ def skipEpisodes(lastWatchedTime):
 		loadEpisodeForTimeslot(timeslot, False)
 		lastWatchedTime = lastWatchedTime + HALF_HOUR
 
-#gets our current timeslot
-def getTimeslot():
-	if DEFAULT_MODE:
-		timeslot = now().hour*2 +  math.floor(now().minute/30)
-	else:
-		timeslot = math.floor(now().second/10)
-	
-	return timeslot
-
 # load the appropriate episode for the corresponding timeslot
 # if we're in the middle of a movie, we do nothing
 # timeslot: the next timeslot we're in
@@ -241,16 +297,47 @@ def loadEpisodeForTimeslot(timeslot, shouldPlay):
 		numSlots = numSlots - 1
 	return
 
-def writeScheduleToDisk():
+def writeChannelData(currentTime, episodes):
 	f = open(CHANNEL_PATH+'channel.data', 'w')
-	f.write(str(int(round(time.time() * 1000)))+'\n')
-	for i in range(0, len(schedule)):
-		f.write(schedule[i].path + '\n')
+	f.write(str(currentTime)+'\n')
+	f.write('\n'.join(episodes))
 	f.close()
 
-# Fetches the first episode at the top of the queue
-# and pushies {series} to the back of the queue
-def updateQueueAndGetNextEpisode(series):
+def writeScheduleToDisk():
+	writeChannelData(int(round(time.time() * 1000)), list(map(lambda episode : episode.path, schedule)))
+
+#region videoPlayer
+
+# Sets the audio track selector in the GUI
+def setAudioTrack():
+	audioTracks = videoPlayer.audio_get_track_description()
+	currentAudioTrack = videoPlayer.audio_get_track()
+	window.listAudioTracks(audioTracks, currentAudioTrack)
+
+# Sets the subtitle track selector in the GUI
+def setSubtitleTrack():
+	subtitleTracks = videoPlayer.video_get_spu_description()
+	currentSubtitleTrack = videoPlayer.video_get_spu()
+	window.listSubtitleTracks(subtitleTracks, currentSubtitleTrack)
+
+def playVideoFile(path, skipTime):
+	media = vlc_instance.media_new(path)
+	videoPlayer.set_media(media)
+	videoPlayer.play()
+	if (skipTime != 0):
+		videoPlayer.set_time(skipTime)#play the timer
+
+	# This is a hack to get audio and subtitle tracks to load
+	CHANNEL_THREAD.wait(0.1)
+	setAudioTrack()
+	setSubtitleTrack()
+
+#endregion
+
+#region Queue
+
+# Opens the queue file and returns its content as a list
+def getQueue():
 	try:
 		with open(CHANNEL_PATH+'queue.data', 'r') as file:
 			queue = [line.rstrip() for line in file]
@@ -258,19 +345,42 @@ def updateQueueAndGetNextEpisode(series):
 	except FileNotFoundError: # no queue file failure
 		print("ERROR: Couldn't find queue file!")
 		sys.exit()
+	return queue
+
+# Updates the queue.data file
+def writeQueue(queue):
+	f = open(CHANNEL_PATH+'queue.data', 'w')
+	f.write('\n'.join(queue))
+	f.close()
+	
+# Fetches the first episode at the top of the queue
+# and pushies {series} to the back of the queue
+def updateQueueAndGetNextEpisode(series):
+	queue = getQueue()
 	queue.append(series)
 	nextEpisode = getFirstEpisode(queue[0])
-	f = open(CHANNEL_PATH+'queue.data', 'w')
-	f.write('\n'.join(queue[1:]))
-	f.close()
+	writeQueue(queue[1:])
 	return nextEpisode
+
+# Scans current directory for new series. Adds any new series to the end of the queue
+def updateQueueWithNewSeries():
+	queue = getQueue()
+	series = list(map(lambda episode: episode.series, schedule))
+	allKnownSeries = series + queue
+	allSeries = list(filter(isValidDirectory, next(os.walk(CHANNEL_PATH))[1]))
+	newSeries = list(set(allSeries) - set(allKnownSeries))
+	random.shuffle(newSeries)
+	newQueue = queue + newSeries
+	writeQueue(newQueue)
+
+#endregion
 
 # Given an episode, updates the schedule with the next episode in the series
 # If there are no more episodes, then load the next episode in the queue
 def updateScheduleWithNextEpisode(episode):
 	foundEpisode = False
 	timeslot = episode.timeslot
-	for dirpath, dirnames, files in os.walk(CHANNEL_PATH + episode.series):
+	for dirpath, UNUSED, files in os.walk(CHANNEL_PATH + episode.series):
 		for name in files:
 			episodePath = os.path.join(dirpath, name)
 			if episodePath == episode.path:
@@ -289,20 +399,12 @@ def updateScheduleWithNextEpisode(episode):
 # of the timeslot.
 def playEpisode(episode, skipTime = 0):
 	updateScheduleWithNextEpisode(episode)
-	media = vlc_instance.media_new(episode.path)
-	videoPlayer.set_media(media)
-	videoPlayer.play()
-	if skipTime != 0:
-		videoPlayer.set_time(skipTime)
+	playVideoFile(episode.path, skipTime)
 	if DEFAULT_MODE:
 		sleepLength = (episode.getLength() - skipTime) / 1000
 		CHANNEL_THREAD.wait(sleepLength)
 		if not checkChannelStopped():
 			playTimer()
-
-# Gets the remaining time in the timeslot, in ms
-def getRemainingTime():
-	return HALF_HOUR - timePassedInTimeslot()
 
 # Plays a random song in the music directory, and returns its length, in ms
 def pickSongAndPlay():
@@ -316,7 +418,6 @@ def pickSongAndPlay():
 	return songLength
 
 def playMusic():
-	global musicPlayer
 	songLength = pickSongAndPlay()
 	while songLength < getRemainingTime(): #repeatedly play random songs until time is up
 		CHANNEL_THREAD.wait(songLength/1000)
@@ -337,10 +438,7 @@ def playMusic():
 #plays a timer that counts down until the next episode slot
 #also plays music while playing the timer			
 def playTimer():
-	media = vlc_instance.media_new(r"assets\30_min_timer.mp4")
-	videoPlayer.set_media(media)
-	videoPlayer.play()
-	videoPlayer.set_time(timePassedInTimeslot())#play the timer
+	playVideoFile(CHANNEL_PATH + "..IGNORE - resources\\30_min_timer.mp4", timePassedInTimeslot())
 	playMusic()
 	playEpisode(schedule[getTimeslot()])
 
@@ -424,7 +522,7 @@ def createChannelData():
 	global NUMBER_SLOTS
 	episodes = []
 	currentTime = int(round(time.time() * 1000))
-	seriesList = list(filter(isValidDirectory, os.listdir(CHANNEL_PATH)))
+	seriesList = list(filter(isValidDirectory, next(os.walk(CHANNEL_PATH))[1]))
 	if (len(seriesList) < NUMBER_SLOTS + 1):
 		print("ERROR: not enough series to fill timeslots.")
 		sys.exit()
@@ -433,15 +531,11 @@ def createChannelData():
 	for series in seriesList[:NUMBER_SLOTS]:
 		episodes.append(getFirstEpisode(series))
 
-	f = open(CHANNEL_PATH+'channel.data', 'w')
-	f.write(str(currentTime)+'\n')
-	f.write('\n'.join(episodes))
-	f.close()
-	f = open(CHANNEL_PATH+'queue.data', 'w')
-	f.write('\n'.join(seriesList[NUMBER_SLOTS:]))
-	f.close()
+	writeChannelData(currentTime, episodes)
+	writeQueue(seriesList[NUMBER_SLOTS:])
 	return currentTime, episodes
 
+# Opens the channel.data file and reads the content
 def loadChannelData():
 	try:
 		with open(CHANNEL_PATH+'channel.data', 'r') as file:
@@ -468,7 +562,7 @@ def setupChannel(shouldSkip):
 	else: #in testing, we make timeslots 10s long, and make a day 1 minute long, so total timeslots is 6
 		NUMBER_SLOTS = 6
 
-		resetVariables()
+	resetVariables()
 	#setup the video player
 	vlc_instance = vlc.Instance("--quiet")
 	videoPlayer = vlc_instance.media_player_new()
@@ -478,6 +572,7 @@ def setupChannel(shouldSkip):
 	lastWatchedTime, episodes = loadChannelData()
 	for row in episodes:
 		schedule.append(Episode(row, len(schedule)))
+	updateQueueWithNewSeries()
 	
 	if DEFAULT_MODE and shouldSkip:
 		skipEpisodes(lastWatchedTime)
@@ -488,7 +583,7 @@ def setupChannel(shouldSkip):
 root = Tk()
 root.title("Episode Controller")
 root.geometry("800x400")
-app = Application(root)
+window = Application(root)
 root.mainloop()
 
 			
